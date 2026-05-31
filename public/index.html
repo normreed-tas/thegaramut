@@ -736,4 +736,10 @@ document.getElementById('yearFilters').addEventListener('click', e => {
 let searchTimer;
 document.getElementById('searchBox').addEventListener('input', e => {
   clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => { currentSearch = e.target.value; r
+  searchTimer = setTimeout(() => { currentSearch = e.target.value; render(); }, 200);
+});
+
+render();
+</script>
+</body>
+</html>
