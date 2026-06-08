@@ -221,7 +221,7 @@ def save_catalogue(html_path: Path, catalogue: list[dict]) -> None:
     new_json = json.dumps(catalogue, ensure_ascii=False, separators=(", ", ": "))
     # Reformat: one object per logical line keeps diffs readable
     new_json = re.sub(r"\}, \{", "},\n{", new_json)
-    new_block = f"const CATALOGUE = [{new_json}];"
+    new_block = f"const CATALOGUE = {new_json};"
     html = re.sub(
         r"const CATALOGUE = \[.*?\];",
         new_block,
