@@ -660,7 +660,7 @@
         <span class="hero-tag">Papua New Guinea Missions</span>
         <span class="hero-tag">CRC Churches International</span>
         <span class="hero-tag">Leader Development</span>
-        <span class="hero-tag">112 Reflections</span>
+        <span class="hero-tag" id="heroCount">116 Reflections</span>
       </div>
     </div>
     <div class="hero-image-wrap">
@@ -710,7 +710,7 @@
   <aside class="sidebar">
     <div class="sidebar-card">
       <div class="stats-row">
-        <div class="stat-box"><span class="stat-n">112</span><span class="stat-l">Reflections</span></div>
+        <div class="stat-box"><span class="stat-n" id="statCount">116</span><span class="stat-l">Reflections</span></div>
         <div class="stat-box"><span class="stat-n">5</span><span class="stat-l">Years</span></div>
       </div>
       <h3>About The Garamut</h3>
@@ -880,6 +880,11 @@ const CATALOGUE = [{"year": 2022, "issue": 22, "date": "11 July 2022", "topic": 
   var btn = document.getElementById('latestBtn');
   btn.href = latest.drive_url;
   btn.setAttribute('download', '');
+  var n = CATALOGUE.length;
+  var heroCount = document.getElementById('heroCount');
+  if (heroCount) heroCount.textContent = n + ' Reflections';
+  var statCount = document.getElementById('statCount');
+  if (statCount) statCount.textContent = n;
 })();
 
 function buildTags(refs) {
