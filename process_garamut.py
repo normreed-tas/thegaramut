@@ -84,8 +84,8 @@ def parse_subject(subject: str):
         if idx != -1:
             topic = subject[idx + len(marker):].strip()
             break
-    # Strip trailing "No.XX for ..." / "No.XX" suffixes added by the sender
-    topic = re.sub(r"\s*[Nn]o\.?\s*\d+\s*(for\s+.+)?$", "", topic).strip()
+    # Strip trailing "No.XX for ..." / ". No.XX for ..." suffixes added by the sender
+    topic = re.sub(r"[.,]?\s*[Nn]o\.?\s*\d+\s*(for\s+.+)?$", "", topic).strip()
     # Strip trailing ellipsis or punctuation
     topic = topic.rstrip(".,").strip()
     # Collapse whitespace
