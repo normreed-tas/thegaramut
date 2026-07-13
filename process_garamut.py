@@ -73,6 +73,8 @@ def parse_subject(subject: str):
       '19. THE GARAMUT - ANOTHER TOPIC'
     Returns (int, str) or (None, None) on failure.
     """
+    # Collapse email line-folding (\r\n + whitespace -> single space)
+    subject = re.sub(r"\r?\n\s*", " ", subject).strip()
     # Look for leading number
     m = re.match(r"(\d+)[.\s]+", subject.strip())
     issue = int(m.group(1)) if m else None
