@@ -79,14 +79,17 @@ def parse_subject(subject: str):
     m = re.match(r"(\d+)[.\s]+", subject.strip())
     issue = int(m.group(1)) if m else None
 
-    # Extract topic after "REFLECTION - " or after the last " - "
+    # Extract topic after known markers (tried in order)
     topic = subject
-    for marker in ["REFLECTION - ", "REFLECTION- ", " - "]:
+    for marker in ["TOPIC: ", "TOPIC:", "REFLECTION - ", "REFLECTION- ", " - "]:
         idx = subject.upper().find(marker.upper())
         if idx != -1:
             topic = subject[idx + len(marker):].strip()
             break
-    # Strip trailing "No.XX for ..." / ". No.XX for ..." suffixes added by the sender
+    # Strip surrounding quotes
+    topic = topic.strip("'\"")
+    # Strip trailing "No.XX for ..." / ". No.XX for ..." / "being for ..." suffixes
+    topic = re.sub(r"[.,]?\s*(being\s+)?[Ff]or\s+.+$", "", topic).strip()
     topic = re.sub(r"[.,]?\s*[Nn]o\.?\s*\d+\s*(for\s+.+)?$", "", topic).strip()
     # Strip trailing ellipsis or punctuation
     topic = topic.rstrip(".,").strip()
