@@ -919,7 +919,7 @@ function render() {
   let html = '';
   let shown = 0;
 
-  for (const r of CATALOGUE) {
+  for (const r of CATALOGUE.slice().reverse()) {
     const yr = String(r.year || '');
     if (currentYear !== 'all' && yr !== currentYear) continue;
     if (q) {
