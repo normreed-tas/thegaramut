@@ -137,10 +137,20 @@ def extract_scripture_refs(text: str) -> str:
     return "; ".join(found)
 
 
-def today_as_str() -> str:
+def email_date(msg) -> datetime:
+    """Return the email's Date header as a datetime, falling back to now()."""
+    from email.utils import parsedate_to_datetime
+    raw = msg.get("Date", "")
+    try:
+        return parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        return datetime.now()
+
+
+def date_as_str(dt: datetime) -> str:
     """Return date like '6 June 2026'."""
-    return datetime.now().strftime("%-d %B %Y") if sys.platform != "win32" \
-        else datetime.now().strftime("%#d %B %Y")
+    return dt.strftime("%-d %B %Y") if sys.platform != "win32" \
+        else dt.strftime("%#d %B %Y")
 
 
 # ── Gmail IMAP ────────────────────────────────────────────────────────────────
@@ -293,7 +303,8 @@ def process_message(uid, msg, dry_run: bool) -> bool:
         log("  No PDF attachment found -- skipping.")
         return False
 
-    year = datetime.now().year
+    sent = email_date(msg)
+    year = sent.year
     filename = clean_filename(topic, year, issue)
     pdf_path = PDF_DIR / filename
 
@@ -334,7 +345,7 @@ def process_message(uid, msg, dry_run: bool) -> bool:
     entry = {
         "year": year,
         "issue": issue,
-        "date": today_as_str(),
+        "date": date_as_str(sent),
         "topic": topic,
         "scripture_refs": refs,
         "file_id": "",
