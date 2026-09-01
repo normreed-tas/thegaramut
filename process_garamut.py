@@ -89,8 +89,11 @@ def parse_subject(subject: str):
     # Strip surrounding quotes
     topic = topic.strip("'\"")
     # Strip trailing "No.XX for ..." / ". No.XX for ..." / "being for ..." suffixes
-    topic = re.sub(r"[.,]?\s*(being\s+)?[Ff]or\s+.+$", "", topic).strip()
-    topic = re.sub(r"[.,]?\s*[Nn]o\.?\s*\d+\s*(for\s+.+)?$", "", topic).strip()
+    # (case-insensitive: subjects are sometimes fully upper-cased)
+    topic = re.sub(r"[.,]?\s*(being\s+)?for\s+.+$", "", topic, flags=re.IGNORECASE).strip()
+    topic = re.sub(r"[.,]?\s*no\.?\s*\d+\s*(for\s+.+)?$", "", topic, flags=re.IGNORECASE).strip()
+    # Strip surrounding quotes again now that a trailing suffix may have exposed one
+    topic = topic.strip("'\"")
     # Strip trailing ellipsis or punctuation
     topic = topic.rstrip(".,").strip()
     # Collapse whitespace
