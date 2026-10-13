@@ -81,7 +81,7 @@ def parse_subject(subject: str):
 
     # Extract topic after known markers (tried in order)
     topic = subject
-    for marker in ["TOPIC: ", "TOPIC:", "REFLECTION - ", "REFLECTION- ", " - "]:
+    for marker in ["TOPIC: ", "TOPIC:", "THEME: ", "THEME:", "REFLECTION - ", "REFLECTION- ", " - "]:
         idx = subject.upper().find(marker.upper())
         if idx != -1:
             topic = subject[idx + len(marker):].strip()
