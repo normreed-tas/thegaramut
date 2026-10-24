@@ -58,6 +58,18 @@ def log(msg: str) -> None:
     print(f"[{ts}] {msg}", flush=True)
 
 
+def decode_subject(msg) -> str:
+    """Decode a (possibly MIME-encoded, e.g. '=?UTF-8?Q?...?=') Subject header."""
+    from email.header import decode_header
+    raw = msg.get("Subject", "") or ""
+    parts = decode_header(raw)
+    decoded = "".join(
+        chunk.decode(charset or "utf-8", errors="replace") if isinstance(chunk, bytes) else chunk
+        for chunk, charset in parts
+    )
+    return decoded
+
+
 def clean_filename(topic: str, year: int, issue: int) -> str:
     """Return e.g. 2026_No19_Be_Still_Quietening_Our_Hearts.pdf"""
     safe = re.sub(r"[^\w\s-]", "", topic)
@@ -188,7 +200,7 @@ def fetch_unprocessed_emails(imap: imaplib.IMAP4_SSL):
         _, msg_data = imap.fetch(uid, "(BODY.PEEK[])")
         raw = msg_data[0][1]
         msg = email.message_from_bytes(raw)
-        subject = msg.get("Subject", "")
+        subject = decode_subject(msg)
         if SUBJECT_HINT.upper() not in subject.upper():
             log(f"  Skipping uid={uid.decode()} -- subject does not match: {subject!r}")
             continue
@@ -293,7 +305,7 @@ def push_to_github(topic: str, filename: str) -> None:
 
 def process_message(uid, msg, dry_run: bool) -> bool:
     """Process one email. Returns True if a new reflection was published."""
-    subject = msg.get("Subject", "")
+    subject = decode_subject(msg)
     log(f"\nProcessing: {subject!r}")
 
     issue, topic = parse_subject(subject)
