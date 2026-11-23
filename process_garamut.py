@@ -87,6 +87,7 @@ def parse_subject(subject: str):
     Extract (issue_number, topic) from subjects like:
       '18. THE GARAMUT PS BARRY'S REFLECTION - BE STILL...'
       '19. THE GARAMUT - ANOTHER TOPIC'
+      '40. THE GARAMUT PASTOR BARRY'S REFLECTION No. 40. AS A BIRD WANDERS'
     Returns (int, str) or (None, None) on failure.
     """
     # Collapse email line-folding (\r\n + whitespace -> single space)
@@ -97,16 +98,28 @@ def parse_subject(subject: str):
 
     # Extract topic after known markers (tried in order)
     topic = subject
-    for marker in ["TOPIC: ", "TOPIC:", "THEME: ", "THEME:", "REFLECTION - ", "REFLECTION- ", " - "]:
+    for marker in ["TOPIC: ", "TOPIC:", "THEME: ", "THEME:", "REFLECTION - ", "REFLECTION- "]:
         idx = subject.upper().find(marker.upper())
         if idx != -1:
             topic = subject[idx + len(marker):].strip()
             break
+    else:
+        # No marker: the topic follows "REFLECTION No. 40." directly, or failing that " - "
+        after_number = re.search(
+            r"REFLECTION\s+No\.?\s*\d+\s*[.:]?\s*(?=\S)", subject, re.IGNORECASE
+        )
+        if after_number:
+            topic = subject[after_number.end():].strip()
+        elif " - " in subject:
+            topic = subject.split(" - ", 1)[1].strip()
     # Strip surrounding quotes
     topic = topic.strip("'\"")
     # Strip trailing "No.XX for ..." / ". No.XX for ..." / "being for ..." suffixes
-    # (case-insensitive: subjects are sometimes fully upper-cased)
-    topic = re.sub(r"[.,]?\s*(being\s+)?for\s+.+$", "", topic, flags=re.IGNORECASE).strip()
+    # (case-insensitive: subjects are sometimes fully upper-cased). "for" must be
+    # followed by a day number, so a title such as "A HEART FOR GOD" is left whole.
+    topic = re.sub(
+        r"[.,]?\s*(being\s+)?for\s+(the\s+)?\d.*$", "", topic, flags=re.IGNORECASE
+    ).strip()
     topic = re.sub(r"[.,]?\s*no\.?\s*\d+\s*(for\s+.+)?$", "", topic, flags=re.IGNORECASE).strip()
     # Strip surrounding quotes again now that a trailing suffix may have exposed one
     topic = topic.strip("'\"")
