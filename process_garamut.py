@@ -18,7 +18,8 @@ import re
 import subprocess
 import sys
 import tempfile
-from datetime import datetime
+import traceback
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # ── Configuration ────────────────────────────────────────────────────────────
@@ -36,6 +37,9 @@ REPO_ROOT   = Path(__file__).parent.resolve()
 PDF_DIR     = REPO_ROOT / "public" / "pdfs"
 INDEX_HTML  = REPO_ROOT / "public" / "index.html"
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+
+LOOKBACK_DAYS = 60   # how far back to look for reflections that were never published
+NET_TIMEOUT   = 60   # seconds before a stalled Gmail or GitHub call gives up
 
 # Bible book names for scripture-reference extraction
 BIBLE_BOOKS = [
@@ -178,33 +182,62 @@ def connect_gmail() -> imaplib.IMAP4_SSL:
             "See the README section 'Gmail App Password' for instructions."
         )
     log(f"Connecting to Gmail IMAP as {GMAIL_USER}...")
-    imap = imaplib.IMAP4_SSL(IMAP_HOST)
+    imap = imaplib.IMAP4_SSL(IMAP_HOST, timeout=NET_TIMEOUT)
     imap.login(GMAIL_USER, GMAIL_PASS)
     log("  Connected.")
     return imap
 
 
-def fetch_unprocessed_emails(imap: imaplib.IMAP4_SSL):
+def imap_since(days: int) -> str:
+    """IMAP date like '25-Sep-2026' (month names must be English whatever the locale)."""
+    months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    d = datetime.now() - timedelta(days=days)
+    return f"{d.day:02d}-{months[d.month - 1]}-{d.year}"
+
+
+def select_all_mail(imap: imaplib.IMAP4_SSL) -> None:
+    """Select Gmail's All Mail folder so archived emails are seen too; INBOX if it can't be found."""
+    _, boxes = imap.list()
+    for raw in boxes or []:
+        line = raw.decode(errors="replace")
+        # The folder is found by its \All flag because its name varies by region
+        if "\\All" in line.split(")")[0]:
+            name = line.rsplit(' "/" ', 1)[-1]
+            if imap.select(name)[0] == "OK":
+                return
+    imap.select("INBOX")
+
+
+def fetch_unpublished_emails(imap: imaplib.IMAP4_SSL):
     """
-    Search INBOX for unread emails from SENDER_FILTER that contain SUBJECT_HINT.
+    Look at every recent Garamut email from SENDER_FILTER, whether read, unread
+    or archived, and return the ones whose issue is not in the published catalogue.
     Returns list of (uid_bytes, email.message.Message).
     """
-    imap.select("INBOX")
-    # Search for UNSEEN messages from the sender
-    _, data = imap.search(None, f'(UNSEEN FROM "{SENDER_FILTER}")')
+    published = committed_catalogue()
+    select_all_mail(imap)
+    _, data = imap.search(
+        None, f'(FROM "{SENDER_FILTER}" SINCE {imap_since(LOOKBACK_DAYS)})'
+    )
     uids = data[0].split()
-    log(f"  Found {len(uids)} unread message(s) from {SENDER_FILTER}.")
 
     results = []
     for uid in uids:
-        _, msg_data = imap.fetch(uid, "(BODY.PEEK[])")
-        raw = msg_data[0][1]
-        msg = email.message_from_bytes(raw)
-        subject = decode_subject(msg)
+        # Headers first, so already-published emails are never downloaded in full
+        _, hdr_data = imap.fetch(uid, "(BODY.PEEK[HEADER.FIELDS (SUBJECT DATE)])")
+        hdr = email.message_from_bytes(hdr_data[0][1])
+        subject = decode_subject(hdr)
         if SUBJECT_HINT.upper() not in subject.upper():
-            log(f"  Skipping uid={uid.decode()} -- subject does not match: {subject!r}")
             continue
-        results.append((uid, msg))
+        issue, _topic = parse_subject(subject)
+        if issue is not None and entry_exists(published, email_date(hdr).year, issue):
+            continue
+        _, msg_data = imap.fetch(uid, "(BODY.PEEK[])")
+        results.append((uid, email.message_from_bytes(msg_data[0][1])))
+
+    log(f"  Checked {len(uids)} email(s) from the last {LOOKBACK_DAYS} days; "
+        f"{len(results)} not yet published.")
     return results
 
 
@@ -235,6 +268,11 @@ def load_catalogue(html: str) -> list[dict]:
     return json.loads(m.group(1))
 
 
+def committed_catalogue() -> list[dict]:
+    """The catalogue as of the last commit, i.e. what has really been published."""
+    return load_catalogue(git_run("show", "HEAD:public/index.html").stdout)
+
+
 def entry_exists(catalogue: list[dict], year: int, issue: int) -> bool:
     return any(e["year"] == year and e["issue"] == issue for e in catalogue)
 
@@ -258,47 +296,70 @@ def save_catalogue(html_path: Path, catalogue: list[dict]) -> None:
         html,
         flags=re.DOTALL,
     )
-    html_path.write_text(html, encoding="utf-8")
+    # Write beside the real file then swap, so a run killed mid-write
+    # can never leave a truncated index.html behind.
+    tmp_path = html_path.with_name(html_path.name + ".tmp")
+    tmp_path.write_text(html, encoding="utf-8")
+    os.replace(tmp_path, html_path)
 
 
 # ── Git / GitHub ──────────────────────────────────────────────────────────────
 
-def git_run(*args, check=True):
-    return subprocess.run(
-        ["git", *args],
-        cwd=str(REPO_ROOT),
-        capture_output=True,
-        text=True,
-        check=check,
-    )
+def git_run(*args, check=True, timeout=NET_TIMEOUT, config=()):
+    """Run git. `config` is a list of 'key=value' settings applied to this call only."""
+    cmd = ["git"]
+    for setting in config:
+        cmd += ["-c", setting]
+    cmd += args
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        # Raised afresh so the command line (which may hold the token) is not logged
+        raise RuntimeError(f"git {args[0]} timed out after {timeout}s") from None
+    if check and result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        if GITHUB_TOKEN:
+            detail = detail.replace(GITHUB_TOKEN, "***")
+        raise RuntimeError(f"git {args[0]} failed: {detail}")
+    return result
+
+
+def unpushed_commits() -> int:
+    """How many local commits GitHub does not have yet, as far as git knows."""
+    result = git_run("rev-list", "--count", "origin/main..HEAD", check=False)
+    return int(result.stdout.strip() or 0) if result.returncode == 0 else 0
+
+
+def git_push() -> None:
+    log("Pushing to GitHub...")
+    # Pushing to 'origin' by name (not a bare URL) keeps git's record of what
+    # has been pushed up to date; the token is supplied for this call only.
+    config = []
+    if GITHUB_TOKEN:
+        config.append(
+            f"url.https://{GITHUB_TOKEN}@github.com/.insteadOf=https://github.com/"
+        )
+    git_run("push", "origin", "HEAD:main", config=config, timeout=NET_TIMEOUT * 2)
+    log("  Pushed successfully.")
 
 
 def push_to_github(topic: str, filename: str) -> None:
     log("Staging changes...")
     git_run("add", f"public/pdfs/{filename}", "public/index.html")
 
-    log("Committing...")
-    msg = f"Add Garamut reflection: {topic}"
-    git_run("commit", "-m", msg)
+    if git_run("diff", "--cached", "--quiet", check=False).returncode != 0:
+        log("Committing...")
+        git_run("commit", "-m", f"Add Garamut reflection: {topic}")
 
-    # Embed token into remote URL for authentication
-    result = git_run("remote", "get-url", "origin")
-    remote_url = result.stdout.strip()
-    # Insert token: https://TOKEN@github.com/...
-    auth_url = re.sub(
-        r"https://",
-        f"https://{GITHUB_TOKEN}@",
-        remote_url,
-    )
-    log("Pushing to GitHub...")
-    subprocess.run(
-        ["git", "push", auth_url, "HEAD:main"],
-        cwd=str(REPO_ROOT),
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    log("  Pushed successfully.")
+    git_push()
 
 
 # ── Main pipeline ─────────────────────────────────────────────────────────────
@@ -320,18 +381,36 @@ def process_message(uid, msg, dry_run: bool) -> bool:
 
     sent = email_date(msg)
     year = sent.year
+
+    # Published already (e.g. the same issue was emailed twice)
+    if entry_exists(committed_catalogue(), year, issue):
+        log(f"  Issue {year}/No.{issue} already published -- skipping.")
+        return False
+
+    catalogue = load_catalogue(INDEX_HTML.read_text(encoding="utf-8"))
+    leftover = next(
+        (e for e in catalogue if e["year"] == year and e["issue"] == issue), None
+    )
+    if leftover:
+        # An earlier run wrote this entry into index.html but was stopped before
+        # committing it. Keep the entry as it stands and finish the job.
+        filename = Path(leftover["drive_url"]).name
+        pdf_path = PDF_DIR / filename
+        log(f"  Issue: No.{issue}  |  finishing a publish that was interrupted")
+        if dry_run:
+            log("  [DRY RUN] Would commit and push the existing entry.")
+            return False
+        if not pdf_path.exists():
+            pdf_path.write_bytes(pdf_bytes)
+            log(f"  Saved PDF -> {pdf_path.relative_to(REPO_ROOT)}")
+        push_to_github(leftover["topic"], filename)
+        return True
+
     filename = clean_filename(topic, year, issue)
     pdf_path = PDF_DIR / filename
 
     log(f"  Issue: No.{issue}  |  Topic: {topic}")
     log(f"  File:  {filename}  ({len(pdf_bytes):,} bytes)")
-
-    # Check catalogue for duplicate
-    html_text = INDEX_HTML.read_text(encoding="utf-8")
-    catalogue  = load_catalogue(html_text)
-    if entry_exists(catalogue, year, issue):
-        log(f"  Issue {year}/No.{issue} already in CATALOGUE -- skipping.")
-        return False
 
     # Save PDF to disk
     if not dry_run:
@@ -390,23 +469,47 @@ def main():
     if args.dry_run:
         log("=== DRY RUN -- no files will be written, no git push ===")
 
+    failures = 0
+
+    # A run stopped between commit and push leaves work that never reached GitHub
+    if not args.dry_run and unpushed_commits():
+        log("Found commit(s) from an earlier run that were never pushed.")
+        try:
+            git_push()
+        except RuntimeError as exc:
+            failures += 1
+            log(f"  ERROR: {exc}")
+
     imap = connect_gmail()
     try:
-        messages = fetch_unprocessed_emails(imap)
+        messages = fetch_unpublished_emails(imap)
         if not messages:
             log("No new Garamut reflections found.")
-            return
 
         published = 0
         for uid, msg in messages:
-            ok = process_message(uid, msg, dry_run=args.dry_run)
+            try:
+                ok = process_message(uid, msg, dry_run=args.dry_run)
+            except Exception:
+                # One bad email must not stop the others; the next run retries it
+                failures += 1
+                log("  ERROR: this reflection was not published.")
+                traceback.print_exc()
+                continue
             if ok:
                 published += 1
                 mark_as_read(imap, uid)
 
-        log(f"\nDone. {published} reflection(s) published.")
+        if messages:
+            log(f"\nDone. {published} reflection(s) published.")
     finally:
-        imap.logout()
+        try:
+            imap.logout()
+        except Exception:
+            pass
+
+    if failures:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
